@@ -1,13 +1,5 @@
 from FRONTEND.GUI import (
-    GraphicalUserInterface,
-    SetAssistantStatus,
-    ShowTextToScreen,
-    TempDirectoryPath,
-    SetMicrophoneStatus,
-    AnswerModifier,
-    QueryModifier,
-    GetMicrophoneStatus,
-    GetAssistantStatus
+    SiriStyleOverlay
 )
 from BACKEND.Model import FirstLayerDMM
 from BACKEND.RealtimeSearchEngine import RealtimeSearchEngine
@@ -16,7 +8,7 @@ from BACKEND.SpeechToText import SpeechRecognition
 from BACKEND.TextToSpeech import TextToSpeech
 from BACKEND.Chatbot import ChatBot
 from BACKEND.FileAccess import list_all_files
-from dotenv import dotenv_values
+from dotenv import dotenv_values, load_dotenv
 from asyncio import run
 from time import sleep
 import subprocess
@@ -26,11 +18,30 @@ import os
 from PyQt5.QtWidgets import QApplication
 from WAKEWORD.wake_word import detect_wake_word
 from threading import Thread
+import cohere
+import pyttsx3
+import speech_recognition as sr
+import sys
+from AURA.aura_controller import AURAController
+
+aura = AURAController()
+print("AURA loaded successfully")
+
+
 
 # Load environment variables
 env_vars = dotenv_values(".env")
 Username = env_vars.get("Username")
 Assistantname = env_vars.get("Assistantname")
+
+
+load_dotenv()
+api_key = os.getenv("CO_API_KEY")
+
+if api_key is None:
+    api_key = "EgH36K0KfAK0c9JIxsFsI4wW4455AVs5Ym0guW6Z"
+
+co = cohere.Client(api_key)
 
 DefaultMessage = f'''{Username} : Hello {Assistantname}, How are you?
 {Assistantname} : Hello {Username}, I am doing well. How are you? And How may I help you?'''
@@ -40,9 +51,36 @@ Functions = ["open", "close", "play", "system", "content", "google search", "you
 
 MEMORY_FILE = "Data/relationship_memory.json"
 
+def speak(text):
+    engine = pyttsx3.init()
+    engine.say(text)
+    engine.runAndWait()
+
+def listen():
+    r = sr.Recognizer()
+    with sr.Microphone() as source:
+        print("Listening...")
+        audio = r.listen(source)
+    try:
+        text = r.recognize_google(audio)
+        return text
+    except:
+        speak("Sorry, I couldn't hear that.")
+        return ""
+    
 def start_assistant():
     print("Waking up Darling...")
     # call your GUI or assistant trigger here
+
+
+def resource_path(relative_path):
+    """ Get absolute path to resource inside .app or script """
+    try:
+        base_path = sys._MEIPASS  # set by PyInstaller
+    except Exception:
+        base_path = os.path.abspath(".")
+
+    return os.path.join(base_path, relative_path)
 
 
 def load_memory():
@@ -55,57 +93,11 @@ def save_memory(memory):
     with open(MEMORY_FILE, "w", encoding="utf-8") as f:
         json.dump(memory, f, indent=4)
 
-def ShowDefaultChatIfNoChats():
-    with open(r'Data/ChatLog.json', "r", encoding='utf-8') as file:
-        if len(file.read()) < 5:
-            with open(TempDirectoryPath('Database.data'), 'w', encoding='utf-8') as f:
-                f.write("")
-            with open(TempDirectoryPath('Response.data'), 'w', encoding='utf-8') as f:
-                f.write(DefaultMessage)
-
-def ReadChatLogJson():
-    with open(r'Data/ChatLog.json', 'r', encoding='utf-8') as file:
-        return json.load(file)
-
-def ChatLogIntegration():
-    json_data = ReadChatLogJson()
-    formatted_chatlog = ""
-    for entry in json_data:
-        if entry["role"] == "user":
-            formatted_chatlog += f"{Username} : {entry['content']}\n"
-        elif entry["role"] == "assistant":
-            formatted_chatlog += f"{Assistantname} : {entry['content']}\n"
-
-    with open(TempDirectoryPath('Database.data'), 'w', encoding='utf-8') as file:
-        file.write(AnswerModifier(formatted_chatlog))
-
-def ShowChatsOnGUI():
-    with open(TempDirectoryPath('Database.data'), "r", encoding='utf-8') as file:
-        data = file.read()
-    if data:
-        with open(TempDirectoryPath('Response.data'), "w", encoding='utf-8') as file:
-            file.write(data)
-
 def handle_file_access():
-    permission = input("Darling: Can I access all your files, love? (yes/no): ")
-    if permission.strip().lower() == "yes":
-        try:
-            files = list_all_files("/Users")  # You can use '/' for full access
+            files = list_all_files("/Users/girishkumarsamal")  # You can use '/' for full access
             print(f"Found {len(files)} files.")
             # You can perform file-related operations here
-        except Exception as e:
-            print(f"Error while accessing files: {e}")   
-    else:
-        print("Okay, I won't access anything for now.")
-
-def InitialExecution(): 
-    SetMicrophoneStatus("False")
-    ShowTextToScreen("")
-    ShowDefaultChatIfNoChats()
-    ChatLogIntegration()
-    ShowChatsOnGUI()
-    handle_file_access()
-
+            print("ACCESSING THE FILES U WANT.")
 
 
 def MainExecution():
@@ -114,10 +106,22 @@ def MainExecution():
     ImageExecution = False
     ImageGenerationQuery = ""
     Answer = ""
-    SetAssistantStatus("Listening...")
     Query = SpeechRecognition()
-    ShowTextToScreen(f"{Username} : {Query}")
-    SetAssistantStatus("Thinking...")
+
+    # ---------- AURA DECISION ----------
+    aura_result = aura.evaluate(Query)
+
+    # If AURA says reject or stay silent, do nothing
+    if aura_result.reject or not aura_result.respond:
+        return True
+
+    from FRONTEND.GUI import update_label
+    update_label(f"{Query}")
+    
+    if "stop listening" in Query.lower():
+        update_label("Stopped Listening")
+        return False
+
     Decision = FirstLayerDMM(Query)
     memory = load_memory()
 
@@ -142,8 +146,6 @@ def MainExecution():
                 TaskExecution = True
 
     if ImageExecution:
-        with open(r"FRONTEND/Files/ImageGeneration.data", "w") as file:
-            file.write(f"{ImageGenerationQuery},True")
         try:
             p1 = subprocess.Popen(['python3', r'BACKEND/ImageGeneration.py'],
                                   stdout=subprocess.PIPE, stderr=subprocess.PIPE,
@@ -153,43 +155,28 @@ def MainExecution():
             print(f"Error starting ImageGeneration.py: {e}")
 
     if G and R or R:
-        SetAssistantStatus("Searching...")
-        Answer = RealtimeSearchEngine(QueryModifier(Mearged_query))
-        ShowTextToScreen(f"{Assistantname} : {Answer}")
-        SetAssistantStatus("Answering...")
+        Answer = RealtimeSearchEngine(Mearged_query)
         TextToSpeech(Answer)
         return True
     else:
         for Queries in Decision:
             if "general" in Queries:
-                SetAssistantStatus("Thinking...")
                 QueryFinal = Queries.replace("general: ", "")
-                Answer=ChatBot(QueryModifier(QueryFinal))
-                SetAssistantStatus("Answering...")
-                ShowTextToScreen(f"{Assistantname} : {Answer}")
-                Thread(target=TextToSpeech, args=(Answer, memory.get("mood", "neutral"))).start()
+                Answer=ChatBot(QueryFinal)
+                if aura_result.respond:
+                    TextToSpeech(Answer, memory.get("mood", "neutral"))
                 return True
             elif "realtime" in Queries:
-                SetAssistantStatus("Searching...")
                 QueryFinal = Queries.replace("realtime ", "")
-                Answer = RealtimeSearchEngine(QueryModifier(QueryFinal))
-                SetAssistantStatus("Answering...")
-                ShowTextToScreen(f"{Assistantname} : {Answer}")
-                Thread(target=TextToSpeech, args=(Answer, memory.get("mood", "neutral"))).start()
+                Answer = RealtimeSearchEngine(QueryFinal)
+                if aura_result.respond:
+                    TextToSpeech(Answer, memory.get("mood", "neutral"))
                 return True
             elif "exit" in Queries:
                 Answer = "Okay, Bye!"
-                SetAssistantStatus("Answering...")
-                ShowTextToScreen(f"{Assistantname} : {Answer}")
-                Thread(target=TextToSpeech, args=(Answer, memory.get("mood", "neutral"))).start()
+                if aura_result.respond:
+                    TextToSpeech(Answer, memory.get("mood", "neutral"))
                 os._exit(1)
-
-                # Save user query to memory history
-                memory["history"].append({
-                "user": Username,
-                "query": Query,
-                "response": Answer,
-})
 
                 # Example: Update mood or preferences based on keywords
                 if "i love you" in Query.lower():
@@ -210,28 +197,32 @@ def MainExecution():
                    except:
                         Answer = "Sorry, I couldn't understand the nickname you want me to use."
                 
-                save_memory(memory)
-
+    # ---------- AURA MEMORY ----------
+    if aura_result.remember:
+        memory["history"].append({
+            "user": Username,
+            "query": Query,
+            "response": Answer
+        })
+        save_memory(memory)
+    return True
 
 def FirstThread():
     while True:
-        if GetMicrophoneStatus() == "True":
-            MainExecution()
-        else:
-            if GetAssistantStatus() != "Available...":
-                SetAssistantStatus("Available...")
-            sleep(0.1)
+        should_continue = MainExecution()
+        if not should_continue:
+            break
+        sleep(0.1)
 
 def SecondThread():
     import sys
     app = QApplication(sys.argv)
-    window = GraphicalUserInterface()
+    window = SiriStyleOverlay()
     window.show()
     sys.exit(app.exec_())
 
 # Correct main entry point
 if __name__ == "__main__":
     print("[HEY DARLING] Starting wake word listener in background...")
-    InitialExecution()
     threading.Thread(target=FirstThread, daemon=True).start()
     SecondThread()

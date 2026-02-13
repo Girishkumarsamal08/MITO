@@ -6,10 +6,10 @@ from dotenv import dotenv_values
 env_vars = dotenv_values(".env")
 
 
-CohereAPIKey = env_vars.get("CohereAPIKey")
+CO_API_KEY = env_vars.get("CO_API_KEY")
 
 
-co = cohere.Client(api_key=CohereAPIKey)
+co = cohere.Client(api_key=CO_API_KEY)
  
 
 funcs = [  
